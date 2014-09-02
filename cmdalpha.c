@@ -3,7 +3,8 @@
 #include <string.h>
 #include "http.h"
 
-#define API_KEY "xxxx"
+#define API_KEY ""
+
 #define WOLFRAM "api.wolframalpha.com"
 #define BASE_QUERY "v2/query?input=&appid=&format=plaintext"
 
@@ -56,13 +57,14 @@ int main(int argc, char *argv[]){
 		perror("Error formatting query\n");
 		return 0;
 	}	
-
+	
 	
 	openHttpSocket();
-	char *content = httpGet(WOLFRAM, query);
+	char *content = httpGetH(WOLFRAM, query,"User-Agent: HTMLGET 1.0");
 	closeHttpSocket();
 
-	
+//	printf(query);
+//	printf(content);	
 	printWolframOutput(content);
 
 
@@ -78,13 +80,14 @@ int main(int argc, char *argv[]){
 
 void printWolframOutput(char *data){
 
+
 	int length = strlen(data);
 	int inside = 0;
 	int diff = 0;
 	int isempty = 1;
 	int j = 0;
 	int buflen = 0;
-	int bufmax = 128;
+	int bufmax = 256;
 	int lastSpace = 0;
 
 	char *cbuffer = (char *)malloc(bufmax);
@@ -98,7 +101,7 @@ void printWolframOutput(char *data){
 	int getPodTitle = 0;
 	int ignorePod = 0;
 
-	for(j = strlen(API_KEY); j < length; j++){
+	for(j = 0; j < length; j++){
 						
 	// Print everything outside <> and title	
 
@@ -181,8 +184,7 @@ void printWolframOutput(char *data){
 			}else if( tlen < 5){
 				
 				title[tlen++] = c;
-			
-				if(strcmp(title, "title") == 0){
+				if(strncmp(title, "title",5) == 0){
 					hastitle = 1;
 					tlen = 0;
 					title[0] = '\0';
@@ -196,14 +198,16 @@ void printWolframOutput(char *data){
 		if(buflen >= bufmax - 8){
 			bufmax = bufmax*2;			
 			char *nbuffer =(char *)malloc(bufmax);
-			nbuffer[0] = '\0';
-			strcat(nbuffer, cbuffer);
+			memcpy(&nbuffer[0], &cbuffer[0],( buflen )* sizeof(char));
 			free(cbuffer);
 			cbuffer = (char *)nbuffer;
 		}
 	}
 
+	printf("buflen=%d\n\n", buflen);
 	printf(cbuffer);
+
+
 	free(cbuffer);
 	free(title);
 	free(xml);
