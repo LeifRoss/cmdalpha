@@ -1,26 +1,16 @@
-#include <stdio.h>
-#include <sys/socket.h>
-#include <arpa/inet.h>
-#include <stdlib.h>
-#include <netdb.h>
-#include <string.h>
+#include "http.h"
 
 
-
-
-
-
-#define HOST "google.com"
+#define HOST "localhost"
 #define PAGE "/"
 #define PORT 80
-#define USERAGENT "HTMLGET 1.0"
+#define USERAGENT "Mozilla/4.0"
 
 
 int sock;
 
 
 int openHttpSocket(){
-
 	
 	if(( sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) < 0){
 		perror("HTTPLIB: Can't create TCP socket\n");
@@ -29,6 +19,7 @@ int openHttpSocket(){
 	
 	return sock;
 }
+
 
 int closeHttpSocket(){
 
@@ -59,52 +50,100 @@ char *getIP(char *host){
 }
 
 
-char *build_get_query(char *host, char *page){
+char *httpGetH( char *host, char *page, char *headers ){
 
+	int tmpres = connectToHost( host );
+
+	
 	char *query;
 	char *getpage = page;
-	char *tpl = "GET /%s HTTP/1.0\r\nHost: %s\r\nUser-Agent: %s\r\n\r\n";
+	char *tpl = "GET /%s HTTP/1.1\r\nHost: %s\r\n%s\r\n\r\n";
 
 	if( getpage[0] == '/' ){
 		getpage = getpage +1;
-		//fprintf(stderr, "Removing leading \"/\", converting %s to %s\n", page, getpage);
 	}
 
+	query = (char *)malloc(strlen(host) + strlen(getpage) + strlen(headers) + strlen(tpl)-5);
+	sprintf(query, tpl, getpage, host, headers);
 
-	query = (char *)malloc(strlen(host) + strlen(getpage) + strlen(USERAGENT) + strlen(tpl)-5);
+	sendHttpPacket(tmpres, query);
 
-	sprintf(query, tpl, getpage, host, USERAGENT);
+	char *httpresult = recieveHttp();
 
-	return query;
-}
+	free(query);
 
-
-
-char *stringAppend( char *a, char *b){
-
-	char *result;
-
-	if((result = malloc(strlen(a)+strlen(b)+1)) != NULL){
-		result[0] = '\0';
-		strcat(result, a);
-		strcat(result, b);
-	}else{
-		perror("HTTPLIB: Error in stringAppend\n");
-	}	
-
-	return result;
+	return httpresult;
 }
 
 
 
 char *httpGet( char *host, char *page ){
 
+	char *tpl = "User-Agent: %s\r\n\r\n";
+	char *header = (char *)malloc( (strlen(tpl) + strlen(USERAGENT))*sizeof(char) );
+	sprintf(header, tpl, USERAGENT);
+
+
+	char *httpresult = httpGetH( host, page, header );
+	
+	free(header);
+	
+	return httpresult;
+}
+
+
+
+char *httpPostH(char *host, char *subpage, char *headers, char *data ){
+
+	int tmpres = connectToHost(host);
+
+	if( subpage[0] == '/'){
+		subpage++;
+	}
+
+	
+	
+	char *tpl = "POST /%s HTTP/1.1\r\nHost: %s\r\nContent-Length: %d\r\n%s\r\n\r\n%s";
+	
+	int contentLength = strlen(data) * sizeof(char);
+	char *query = (char *)malloc(( strlen(tpl) + strlen(headers) + strlen(host) + strlen(subpage) + strlen(data) - 5) * sizeof(char));
+	sprintf(query, tpl, subpage, host, contentLength, headers, data);
+
+	sendHttpPacket(tmpres, query);	
+
+	char *httpresult = recieveHttp();
+	
+	free(query);	
+	free(tpl);
+
+	return httpresult;
+}
+
+
+
+
+char *httpPost(char *host, char *subpage, char *data ){
+
+	char* tpl = "User-agent: %s\r\nContent-Type: application/x-www-form-urlencoded";
+	char* header = (char *)malloc( (strlen(tpl) + strlen(USERAGENT)) * sizeof(char) );
+	
+	sprintf(header, tpl, USERAGENT);
+	
+	char *httpresult = httpPostH(host, subpage, header, data);
+
+	free(tpl);
+	free(header);
+
+	return httpresult;
+}
+
+
+int connectToHost( char* host ){
+
 
 	struct sockaddr_in *remote;	
 	int tmpres;
 	char *ip;
-	char *get;
-	char buf[BUFSIZ+1];
 
 	ip = getIP(host);
 
@@ -127,14 +166,22 @@ char *httpGet( char *host, char *page ){
 		exit(1);
 	}
 
-	get = build_get_query(host, page);
+	free(remote);
+	free(ip);
+
+	return tmpres;
+}
+
+
+void sendHttpPacket(int tmpres, char *packet){
+
 
 	// Send package
 	int sent = 0;
 
-	while(sent < strlen(get)){
+	while(sent < strlen(packet)){
 	
-		tmpres = send(sock, get+sent, strlen(get)-sent, 0);
+		tmpres = send(sock, packet+sent, strlen(packet)-sent, 0);
 		
 		if(tmpres == -1){
 			perror("HTTPLIB: Can't send query\n");
@@ -144,19 +191,31 @@ char *httpGet( char *host, char *page ){
 		sent += tmpres;
 	}
 
+}
 
-	// Recieve package
+
+char* recieveHttp(){
+	
+	char buf[BUFSIZ+1];
 
 	memset(buf, 0, sizeof(buf));
 	int httpstart = 0;
 	char *httpcontent;
-	char *httpresult;
+	int len = 0;
+	int tmpres = 0;
+
+	//allocate
+
+	int allocated = 512;
+	char *httpresult = (char *)malloc(allocated);
+
 
 	while((tmpres = recv(sock, buf, BUFSIZ, 0)) > 0){
 		
 		if(httpstart == 0){
 
 			httpcontent = strstr(buf, "\r\n\r\n");
+		
 			if(httpcontent != NULL){
 				httpstart = 1;
 				httpcontent += 4;
@@ -167,21 +226,34 @@ char *httpGet( char *host, char *page ){
 		}
 
 		if( httpstart ){
-//			fprintf(stdout, httpcontent);
-			httpresult = stringAppend(httpresult, httpcontent);			
+			
+			int contentlen = strlen(httpcontent);
+			int nlen = len + contentlen;
+						
+			if(nlen >= allocated){	
+				allocated = (nlen + len) * sizeof(char);
+				char *nbuffer = (char *)malloc(allocated);
+				memcpy(&nbuffer[0], &httpresult[0], (len)*sizeof(char));
+				free(httpresult);
+				httpresult = (char *)nbuffer;
+			}			
+
+			memcpy( &httpresult[len], &httpcontent[0], contentlen*sizeof(char));
+			len = nlen;	
 		}
 		
 		memset(buf, 0, tmpres);
 	}	
 	
+	
+	char *queryresult = (char *)malloc(len*sizeof(char));
+	memcpy(&queryresult[0], &httpresult[0], (len)*sizeof(char));
+	
+	free(httpresult);
 
-	free(get);
-	free(remote);
-	free(ip);
 
-	return httpresult;
+	return queryresult;
 }
-
 
 
 
@@ -273,6 +345,161 @@ char *urlEncode( char *in ){
 
 	return encoded;
 }
+
+
+char *xurlEncode( char *in ){
+
+
+
+	int length = strlen(in);
+	int j;
+
+	char *result = (char *)malloc( 3*length * sizeof(char) );
+	int len = 0;
+	
+
+	for(j = 0; j < length; j++){
+
+		char c = in[j];
+		
+		switch(c){
+
+		case ' ':
+			len += addToChar(result, "+", len);
+		break;	
+		case '!':
+			len += addToChar(result, "%21", len);	
+		break;
+		case '#':
+			len += addToChar(result, "%23", len);
+		break;
+		case '$':
+			len += addToChar(result, "%24", len);
+		break;
+		case '&':
+			len += addToChar(result, "%26", len);
+		break;
+		case '\'':
+			len += addToChar(result, "%27", len);
+		break;
+		case '(':
+			len += addToChar(result, "%28", len);
+		break;
+		case ')':
+			len += addToChar(result, "%29", len);
+		break;
+		case '*':
+			len += addToChar(result, "%2A", len);
+		break;
+		case '+':
+			len += addToChar(result, "%2B", len);
+		break;
+		case ',':
+			len += addToChar(result, "%2C", len);
+		break;
+		case '/':
+			len += addToChar(result, "%2F", len);
+		break;
+		case ':':
+			len += addToChar(result, "%3A", len);
+		break;
+		case ';':
+			len += addToChar(result, "%3B", len);
+		break;
+		case '=':
+			len += addToChar(result, "%3D", len);
+		break;
+		case '?':
+			len += addToChar(result, "%3F", len);
+		break;
+		case '@':
+			len += addToChar(result, "%40", len);
+		break;
+		case '[':
+			len += addToChar(result, "%5B", len);
+		break;
+		case ']':
+			len += addToChar(result, "%5D", len);
+		break;
+		default:
+			result[len++] = c;
+			
+		}
+	}
+	
+	char *encoded = (char *)malloc( len * sizeof(char) );
+	encoded[0] = '\0';	
+	
+	strncpy(encoded, result, len);
+	free(result);
+
+	return encoded;
+}
+
+
+char *xformEncode( char *in[], int params){
+
+	int capacity = 128;
+	char *buffer = (char *)malloc(capacity);
+	int len = 0;
+
+	int j;
+	int elements = params*2;
+	for(j = 0; j < elements; j += 2){
+
+		char *key = in[j];
+		char *val = in[j+1];
+	
+		char *keyEncoded = xurlEncode(key);
+		char *valEncoded = xurlEncode(val);		
+		
+		int nlen = len + (strlen(keyEncoded) + strlen(valEncoded) + 4) * sizeof(char);
+		
+		if(nlen >= capacity) {
+			capacity = nlen + capacity;
+			char *nbuffer = (char *)malloc(capacity);
+			memcpy(nbuffer, buffer, len);
+			free(buffer);
+			buffer = nbuffer;	
+		}
+		
+		len += addToChar(buffer, keyEncoded, len);
+		buffer[len++] = '=';
+		len += addToChar(buffer, valEncoded, len);
+		
+		if(j < elements-1){
+			buffer[len++] = '&';
+		}
+
+	}
+
+	char *encoded = (char *)malloc(len*sizeof(char));
+	strncpy(encoded, buffer, len);
+	
+	free(buffer);
+
+	return encoded;
+}
+
+
+
+char *stringAppend( char *a, char *b){
+
+	char *result;
+
+	if((result = malloc(strlen(a)+strlen(b)+1)) != NULL){
+		result[0] = '\0';
+		strcat(result, a);
+		strcat(result, b);
+	}else{
+		perror("HTTPLIB: Error in stringAppend\n");
+	}	
+
+	return result;
+}
+
+
+
 
 
 int addToChar(char *in, char *add, int len){
